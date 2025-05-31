@@ -1,4 +1,3 @@
-# Минимальный пример .pro-файла для проекта с SQLite
 QT       += core gui sql  # Добавлен модуль sql
 QT += sql
 TARGET   = MyNotesApp

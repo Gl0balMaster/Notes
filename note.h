@@ -39,7 +39,6 @@ private:
         m_layout = new QVBoxLayout(this);
         m_layout->setContentsMargins(5, 5, 5, 5);
 
-        // Label для отображения текста
         m_label = new QLabel(this);
         m_label->setWordWrap(true);
         m_label->setStyleSheet(
@@ -55,7 +54,6 @@ private:
     }
 
     void startEditing() {
-        // Создаем редактор
         m_editor = new QLineEdit(this);
         m_editor->setText(m_text);
         m_editor->setStyleSheet(
@@ -67,13 +65,11 @@ private:
             "}"
             );
 
-        // Заменяем label на editor
         m_layout->replaceWidget(m_label, m_editor);
         m_label->hide();
         m_editor->setFocus();
         m_editor->selectAll();
 
-        // Подключаем обработчики
         connect(m_editor, &QLineEdit::editingFinished, this, &TextNote::finishEditing);
         connect(m_editor, &QLineEdit::returnPressed, this, &TextNote::finishEditing);
     }
