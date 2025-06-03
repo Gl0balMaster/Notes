@@ -1,17 +1,40 @@
-#include "MainWindow.h"
+#include "mainwindow.h"
+
 #include <QApplication>
-#include <QtSql/QSqlDatabase>
-#include <QMessageBox>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QDir>
+#include <QDebug>
+#include <QSqlQuery>
 
-int main(int argc, char *argv[]) {
+const QString DbName = "notes.db";
+const QString DbConnectionName = "notes_connection";
+
+
+int main(int argc, char *argv[])
+{
     QApplication a(argc, argv);
+    MainWindow w;
 
-    if (!QSqlDatabase::drivers().contains("QSQLITE")) {
-        QMessageBox::critical(nullptr, "Error", "SQLite driver not available!");
-        return 1;
+    auto dbPath = QDir::currentPath() + QDir::separator()+ DbName;
+    qDebug() << "path"<<dbPath;
+    auto db = QSqlDatabase::addDatabase("QSQLITE", DbConnectionName);
+    db.setDatabaseName(dbPath);
+
+    if (!db.open()) {
+        qCritical() << "Cannot open database:" << db.lastError().text();
+        return -1;
     }
 
-    MainWindow w;
+    // Создаем таблицу, если не существует
+    QSqlQuery query(db);
+    if (!query.exec("CREATE TABLE IF NOT EXISTS notes ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "title TEXT NOT NULL, "
+                    "content TEXT)")) {
+        qCritical() << "Failed to create table:" << query.lastError().text();
+    }
+
     w.show();
     return a.exec();
 }

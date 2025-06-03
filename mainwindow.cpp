@@ -1,196 +1,197 @@
 #include "mainwindow.h"
-#include "ExpandableNoteButton.h"
-#include <QVBoxLayout>
-#include <QPushButton>
-#include <QLineEdit>
+#include "ui_mainwindow.h"
 #include <QSqlQuery>
+#include <QSqlError>
 #include <QMessageBox>
-#include <QTimer>
-#include <qapplication.h>
-#include <qsqlerror.h>
+#include <QDebug>
 
 MainWindow::MainWindow(QWidget *parent)
-    : QMainWindow(parent),
-    m_centralWidget(new QWidget(this)),
-    m_mainLayout(new QVBoxLayout(m_centralWidget))
+    : QMainWindow(parent)
+    , ui(new Ui::MainWindow)
+    , m_db(QSqlDatabase::addDatabase("QSQLITE"))
+    , m_saveTimer(new QTimer(this))
 {
-    setCentralWidget(m_centralWidget);
-    m_mainLayout->setAlignment(Qt::AlignTop);
-    setMinimumSize(400, 300);
+    ui->setupUi(this);
 
-    if (!initDatabase()) {
-        QMessageBox::warning(this, "Warning", "Working in offline mode - notes won't be saved!");
-    }
+    // Инициализация базы данных
+    initDatabase();
 
-    cleanDatabase();
+    // Настройка таймера автосохранения
+    m_saveTimer->setSingleShot(true);
+    connect(m_saveTimer, &QTimer::timeout, this, &MainWindow::saveCurrentNote);
+
+    // Подключение сигналов
+    connect(ui->addButton, &QPushButton::clicked, this, &MainWindow::createNewNote);
+    connect(ui->titleEdit, &QLineEdit::textChanged, this, &MainWindow::onTextChanged);
+    connect(ui->contentEdit, &QPlainTextEdit::textChanged, this, &MainWindow::onTextChanged);
+
+    // Загрузка заметок
     loadNotes();
-
-    QPushButton *addButton = new QPushButton("Добавить заметку", this);
-    m_mainLayout->addWidget(addButton);
-    connect(addButton, &QPushButton::clicked, this, [this]() { addNewButton(); });
 }
 
-MainWindow::~MainWindow() {
-    if (m_db.isOpen()) {
-        m_db.close();
-    }
-}
-
-bool MainWindow::initDatabase() {
-    m_db = QSqlDatabase::addDatabase("QSQLITE");
+void MainWindow::initDatabase()
+{
     m_db.setDatabaseName("notes.db");
-
     if (!m_db.open()) {
-        qCritical() << "Database error:" << m_db.lastError().text();
-        return false;
+        QMessageBox::critical(this, "Ошибка", "Не удалось открыть базу данных");
+        return;
     }
 
     QSqlQuery query;
-    if (!query.exec("CREATE TABLE IF NOT EXISTS notes ("
-                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                    "title TEXT NOT NULL UNIQUE, "
-                    "content TEXT NOT NULL, "
-                    "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")) {
-        qCritical() << "Table creation error:" << query.lastError().text();
-        return false;
-    }
-
-    m_dbIsValid = true;
-    return true;
+    query.exec("CREATE TABLE IF NOT EXISTS notes ("
+               "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+               "title TEXT UNIQUE NOT NULL, "
+               "content TEXT NOT NULL)");
 }
 
-void MainWindow::cleanDatabase() {
-    if (!m_dbIsValid) return;
-
-    QSqlQuery query;
-    if (!query.exec("DELETE FROM notes")) {
-        qCritical() << "Failed to clean database:" << query.lastError().text();
-    }
-    query.exec("DELETE FROM sqlite_sequence WHERE name='notes'");
-    m_counter = 0;
-}
-
-void MainWindow::loadNotes() {
-    if (!m_dbIsValid) return;
-
-    QSqlQuery query("SELECT title, content FROM notes ORDER BY created_at DESC");
+void MainWindow::loadNotes()
+{
+    QSqlQuery query("SELECT title, content FROM notes ORDER BY id");
     while (query.next()) {
-        addNewButton(query.value(0).toString(), query.value(1).toString());
+        addNoteToUI(query.value(0).toString(), query.value(1).toString());
     }
 }
 
-void MainWindow::addNewButton(const QString& title, const QString& content) {
-    QString buttonTitle = title.isEmpty() ?
-                              "Заметка " + QString::number(++m_counter) :
-                              title;
+void MainWindow::addNoteToUI(const QString &title, const QString &content)
+{
+    QVBoxLayout *noteLayout = new QVBoxLayout();
 
-    NoteBtn* newButton = new NoteBtn(buttonTitle, m_centralWidget);
-    m_mainLayout->addWidget(newButton);
-    m_mainLayout->addWidget(newButton->noteEditor());
+    QPushButton *noteBtn = new QPushButton(title);
+    noteBtn->setStyleSheet("text-align:left; padding:5px;");
+    noteBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
-    if (!content.isEmpty()) {
-        newButton->noteEditor()->setText(content);
-    }
+    QPushButton *deleteBtn = new QPushButton("×");
+    deleteBtn->setStyleSheet("color:red; font-weight:bold;");
+    deleteBtn->setFixedSize(25, 25);
 
-    if (m_dbIsValid) {
-        saveNoteToDatabase(buttonTitle, newButton->noteEditor()->toPlainText());
-    }
+    noteLayout->addWidget(noteBtn);
+    noteLayout->addWidget(deleteBtn);
+    ui->notesLayout->addLayout(noteLayout);
 
-    connect(newButton->noteEditor(), &QTextEdit::textChanged, [this, newButton]() {
-        if (m_dbIsValid) {
-            saveNoteToDatabase(newButton->text(), newButton->noteEditor()->toPlainText());
+    connect(noteBtn, &QPushButton::clicked, [this, title]() {
+        if (!m_currentNoteTitle.isEmpty() && m_currentNoteTitle != title) {
+            saveCurrentNote(); // Сохраняем предыдущую заметку перед переключением
         }
+        selectNote(title);
     });
 
-    connect(newButton, &NoteBtn::clicked, [this, newButton]() {
-        if (QApplication::keyboardModifiers() == Qt::ControlModifier) {
-            if (m_dbIsValid) {
-                deleteNoteFromDatabase(newButton->text());
-            }
-            newButton->deleteLater();
-            QTimer::singleShot(0, this, [this]() { adjustSize(); });
-        }
+    connect(deleteBtn, &QPushButton::clicked, [this, title, noteLayout]() {
+        deleteNote(title, noteLayout);
     });
-
-    newButton->installEventFilter(this);
 }
 
-void MainWindow::saveNoteToDatabase(const QString& title, const QString& content) {
-    if (!m_dbIsValid) return;
+void MainWindow::selectNote(const QString &title)
+{
+    m_isNoteLoading = true; // Устанавливаем флаг загрузки
 
     QSqlQuery query;
-    query.prepare("INSERT OR REPLACE INTO notes (title, content) VALUES (?, ?)");
+    query.prepare("SELECT content FROM notes WHERE title = ?");
+    query.addBindValue(title);
+
+    if (query.exec() && query.next()) {
+        ui->titleEdit->setText(title);
+        ui->contentEdit->setPlainText(query.value(0).toString());
+        m_currentNoteTitle = title;
+    }
+
+    m_isNoteLoading = false; // Сбрасываем флаг загрузки
+}
+
+void MainWindow::onTextChanged()
+{
+    if (m_isNoteLoading || m_currentNoteTitle.isEmpty()) return;
+    m_saveTimer->start(1000); // Запускаем таймер автосохранения
+}
+
+void MainWindow::saveCurrentNote()
+{
+    if (m_currentNoteTitle.isEmpty()) return;
+
+    QString newTitle = ui->titleEdit->text().trimmed();
+    QString newContent = ui->contentEdit->toPlainText();
+
+    if (newTitle.isEmpty()) {
+        QMessageBox::warning(this, "Ошибка", "Заголовок не может быть пустым");
+        return;
+    }
+
+    QSqlQuery query;
+    query.prepare("UPDATE notes SET title = ?, content = ? WHERE title = ?");
+    query.addBindValue(newTitle);
+    query.addBindValue(newContent);
+    query.addBindValue(m_currentNoteTitle);
+
+    if (!query.exec()) {
+        QMessageBox::warning(this, "Ошибка", "Не удалось сохранить заметку");
+        return;
+    }
+
+    // Обновляем заголовок в интерфейсе, если он изменился
+    if (m_currentNoteTitle != newTitle) {
+        // Находим и обновляем кнопку с заметкой
+        for (int i = 0; i < ui->notesLayout->count(); ++i) {
+            QLayoutItem *item = ui->notesLayout->itemAt(i);
+            if (item->layout()) {
+                QPushButton *btn = qobject_cast<QPushButton*>(item->layout()->itemAt(0)->widget());
+                if (btn && btn->text() == m_currentNoteTitle) {
+                    btn->setText(newTitle);
+                    break;
+                }
+            }
+        }
+        m_currentNoteTitle = newTitle;
+    }
+
+    qDebug() << "Заметка сохранена:" << newTitle;
+}
+
+void MainWindow::createNewNote()
+{
+    QString title = "Новая заметка " + QString::number(++m_noteCounter);
+    QString content = "";
+
+    QSqlQuery query;
+    query.prepare("INSERT INTO notes (title, content) VALUES (?, ?)");
     query.addBindValue(title);
     query.addBindValue(content);
 
     if (!query.exec()) {
-        qCritical() << "Save error:" << query.lastError().text();
+        QMessageBox::warning(this, "Ошибка", "Не удалось создать заметку");
+        return;
     }
+
+    addNoteToUI(title, content);
+    selectNote(title);
 }
 
-void MainWindow::deleteNoteFromDatabase(const QString& title) {
-    if (!m_dbIsValid) return;
-
+void MainWindow::deleteNote(const QString &title, QVBoxLayout *layout)
+{
     QSqlQuery query;
     query.prepare("DELETE FROM notes WHERE title = ?");
     query.addBindValue(title);
 
     if (!query.exec()) {
-        qCritical() << "Delete error:" << query.lastError().text();
+        QMessageBox::warning(this, "Ошибка", "Не удалось удалить заметку");
+        return;
+    }
+
+    // Удаляем из интерфейса
+    QLayoutItem *item;
+    while ((item = layout->takeAt(0))) {
+        delete item->widget();
+        delete item;
+    }
+    delete layout;
+
+    if (m_currentNoteTitle == title) {
+        m_currentNoteTitle.clear();
+        ui->titleEdit->clear();
+        ui->contentEdit->clear();
     }
 }
 
-bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
-    if(event->type() == QEvent::MouseButtonDblClick) {
-        if(auto* btn = qobject_cast<NoteBtn*>(obj)) {
-            editNoteTitle(btn);
-            return true;
-        }
-    }
-    return QMainWindow::eventFilter(obj, event);
-}
-
-void MainWindow::editNoteTitle(NoteBtn* btn) {
-    QString oldTitle = btn->text();
-
-    QLineEdit* edit = new QLineEdit(btn->parentWidget());
-    edit->setText(oldTitle);
-    edit->setGeometry(btn->geometry());
-    edit->show();
-    btn->hide();
-
-    auto finishEditing = [=]() {
-        QString newTitle = edit->text().trimmed();
-        if(!newTitle.isEmpty() && newTitle != oldTitle) {
-            btn->setText(newTitle);
-            if(m_dbIsValid) {
-                updateNoteTitleInDatabase(oldTitle, newTitle);
-            }
-            emit btn->titleChanged(newTitle);
-        }
-        edit->deleteLater();
-        btn->show();
-        adjustSize();
-    };
-
-    connect(edit, &QLineEdit::editingFinished, finishEditing);
-    connect(edit, &QLineEdit::returnPressed, finishEditing);
-}
-
-void MainWindow::updateNoteTitleInDatabase(const QString& oldTitle, const QString& newTitle) {
-    if(!m_dbIsValid) return;
-
-    m_db.transaction();
-
-    QSqlQuery query;
-    query.prepare("UPDATE notes SET title = ? WHERE title = ?");
-    query.addBindValue(newTitle);
-    query.addBindValue(oldTitle);
-
-    if(!query.exec()) {
-        m_db.rollback();
-        qCritical() << "Title update failed:" << query.lastError();
-    } else {
-        m_db.commit();
-    }
+MainWindow::~MainWindow()
+{
+    m_db.close();
+    delete ui;
 }

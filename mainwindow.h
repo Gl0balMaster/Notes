@@ -1,32 +1,40 @@
-#pragma once
+#ifndef MAINWINDOW_H
+#define MAINWINDOW_H
+
 #include <QMainWindow>
-#include <qsqldatabase.h>
+#include <QSqlDatabase>
+#include <QTimer>
+#include <QVBoxLayout>
 
-class QVBoxLayout;
-class NoteBtn;
+QT_BEGIN_NAMESPACE
+namespace Ui { class MainWindow; }
+QT_END_NAMESPACE
 
-class MainWindow : public QMainWindow {
+class MainWindow : public QMainWindow
+{
     Q_OBJECT
+
 public:
-    explicit MainWindow(QWidget *parent = nullptr);
+    MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
+private slots:
+    void saveCurrentNote();
+    void onTextChanged();
+
 private:
-    bool initDatabase();
-    void cleanDatabase();
-    void loadNotes();
-    void addNewButton(const QString& title = "", const QString& content = "");
-    void updateNoteTitleInDatabase(const QString& oldTitle, const QString& newTitle);
-    void saveNoteToDatabase(const QString& title, const QString& content);
-    void deleteNoteFromDatabase(const QString& title);
-    void editNoteTitle(NoteBtn* btn);
-
-    QWidget* m_centralWidget;
-    QVBoxLayout* m_mainLayout;
-    int m_counter = 0;
-    bool m_dbIsValid = false;
+    Ui::MainWindow *ui;
     QSqlDatabase m_db;
+    QString m_currentNoteTitle;
+    QTimer* m_saveTimer;
+    bool m_isNoteLoading = false;
+    int m_noteCounter = 0;
 
-protected:
-    bool eventFilter(QObject* obj, QEvent* event) override;
+    void initDatabase();
+    void loadNotes();
+    void createNewNote();
+    void addNoteToUI(const QString &title, const QString &content);
+    void selectNote(const QString &title);
+    void deleteNote(const QString &title, QVBoxLayout *layout);
 };
+#endif
