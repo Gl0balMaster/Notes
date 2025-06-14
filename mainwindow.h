@@ -23,6 +23,8 @@ private slots:
     void onTextChanged();
 
 private:
+    QVBoxLayout *m_notesLayout; // Заменяет прямой доступ к ui->notesLayout
+
     Ui::MainWindow *ui;
     QSqlDatabase m_db;
     QString m_currentNoteTitle;

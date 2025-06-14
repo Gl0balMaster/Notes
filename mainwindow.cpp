@@ -13,6 +13,16 @@ MainWindow::MainWindow(QWidget *parent)
 {
     ui->setupUi(this);
 
+    // Создаем контейнерный виджет для заметок
+    QWidget *notesContainer = new QWidget();
+    m_notesLayout = new QVBoxLayout(notesContainer); // Теперь это член класса
+    m_notesLayout->setAlignment(Qt::AlignTop);
+    notesContainer->setLayout(m_notesLayout);
+
+    // Настраиваем scrollArea
+    ui->scrollArea->setWidget(notesContainer);
+    ui->scrollArea->setWidgetResizable(true);
+
     // Инициализация базы данных
     initDatabase();
 
@@ -66,7 +76,8 @@ void MainWindow::addNoteToUI(const QString &title, const QString &content)
 
     noteLayout->addWidget(noteBtn);
     noteLayout->addWidget(deleteBtn);
-    ui->notesLayout->addLayout(noteLayout);
+
+    m_notesLayout->addLayout(noteLayout);
 
     connect(noteBtn, &QPushButton::clicked, [this, title]() {
         if (!m_currentNoteTitle.isEmpty() && m_currentNoteTitle != title) {
@@ -129,13 +140,16 @@ void MainWindow::saveCurrentNote()
     // Обновляем заголовок в интерфейсе, если он изменился
     if (m_currentNoteTitle != newTitle) {
         // Находим и обновляем кнопку с заметкой
-        for (int i = 0; i < ui->notesLayout->count(); ++i) {
-            QLayoutItem *item = ui->notesLayout->itemAt(i);
-            if (item->layout()) {
-                QPushButton *btn = qobject_cast<QPushButton*>(item->layout()->itemAt(0)->widget());
-                if (btn && btn->text() == m_currentNoteTitle) {
-                    btn->setText(newTitle);
-                    break;
+        QWidget *container = ui->scrollArea->widget();
+        if (container) {
+            for (int i = 0; i < m_notesLayout->count(); ++i) {
+                QLayoutItem *item = m_notesLayout->itemAt(i);
+                if (item && item->layout()) {
+                    QPushButton *btn = qobject_cast<QPushButton*>(item->layout()->itemAt(0)->widget());
+                    if (btn && btn->text() == m_currentNoteTitle) {
+                        btn->setText(newTitle);
+                        break;
+                    }
                 }
             }
         }
@@ -183,6 +197,7 @@ void MainWindow::deleteNote(const QString &title, QVBoxLayout *layout)
     }
     delete layout;
 
+    // Обновляем текущую заметку, если нужно
     if (m_currentNoteTitle == title) {
         m_currentNoteTitle.clear();
         ui->titleEdit->clear();
